@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION 1.0
+.VERSION 1.2.1
 .GUID 71904827-7092-4941-9a1f-32c207e65075
 .AUTHOR Michael Niehaus
 .COMPANYNAME
@@ -13,6 +13,7 @@
 .EXTERNALSCRIPTDEPENDENCIES
 .RELEASENOTES
 v1.0.0 - Initial version
+v1.2.1 - Write a message when app is successfully updated
 #>
 
 <#
@@ -40,6 +41,10 @@ Begin {
     Add-Type -AssemblyName System.Runtime.WindowsRuntime
     $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
     function Await($WinRtTask, $ResultType) {
+        trap {
+            $error.RemoveAt(0)
+            Continue
+        }
         $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
         $netTask = $asTask.Invoke($null, @($WinRtTask))
         $netTask.Wait(-1) | Out-Null
@@ -73,10 +78,9 @@ Process {
                     break
                 }
 
-                Write-Host $updateResult.GetCurrentStatus().PercentComplete
                 if ($updateResult.GetCurrentStatus().PercentComplete -eq 100)
                 {
-                    Write-Verbose "App update completed: $app"
+                    Write-Host "App update completed: $app"
                     break
                 }
                 Start-Sleep -Seconds 3
@@ -91,7 +95,7 @@ Process {
             # I'm happy to just let this slide for now.
             $problem = $_.Exception.InnerException # we'll just take the first one
             if ($problem.GetType() -eq [System.IO.FileNotFoundException]) {
-                Write-Warning "App is not available on the Microsoft Store: $app"
+                Write-Verbose "App is not available on the Microsoft Store: $app"
             } else {
                 Write-Warning "Error updating app $app (perhaps it is not installed): $problem"
             }
@@ -102,4 +106,3 @@ Process {
         }
     }
 }
-
