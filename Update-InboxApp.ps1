@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION 1.2.1
+.VERSION 1.3
 .GUID 71904827-7092-4941-9a1f-32c207e65075
 .AUTHOR Michael Niehaus
 .COMPANYNAME
@@ -14,6 +14,7 @@
 .RELEASENOTES
 v1.0.0 - Initial version
 v1.2.1 - Write a message when app is successfully updated
+v1.3 - Fix "Index was out of range" errors from RemoveAt when $error is empty (e.g. when run from a module)
 #>
 
 <#
@@ -41,15 +42,21 @@ Begin {
     Add-Type -AssemblyName System.Runtime.WindowsRuntime
     $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
     function Await($WinRtTask, $ResultType) {
-        trap {
-            $error.RemoveAt(0)
-            Continue
-        }
         $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
         $netTask = $asTask.Invoke($null, @($WinRtTask))
-        $netTask.Wait(-1) | Out-Null
-        $netTask.Result
-    }    
+        try {
+            $netTask.Wait(-1) | Out-Null
+            $netTask.Result
+        }
+        catch {
+            # The Store rejects update requests for some packages (e.g. framework packages).
+            # Treat that as "no update available" rather than failing the whole app.
+            $problem = $_.Exception
+            while ($problem.InnerException) { $problem = $problem.InnerException }
+            Write-Verbose "Update request failed: $($problem.Message)"
+            $null
+        }
+    }
 }
 
 Process {
