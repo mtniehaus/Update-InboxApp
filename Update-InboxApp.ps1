@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION 1.4
+.VERSION 1.5
 .GUID 71904827-7092-4941-9a1f-32c207e65075
 .AUTHOR Michael Niehaus
 .COMPANYNAME
@@ -16,6 +16,8 @@ v1.0.0 - Initial version
 v1.2.1 - Write a message when app is successfully updated
 v1.3 - Fix "Index was out of range" errors from RemoveAt when $error is empty (e.g. when run from a module)
 v1.4 - Support PowerShell 7 by running the update in a Windows PowerShell 5.1 session
+v1.5 - On PowerShell 7, return the messages from the Windows PowerShell 5.1 session as normal verbose, warning, debug,
+       information and error records, so they can be redirected (*>&1) and are captured in transcripts
 #>
 
 <#
@@ -34,8 +36,9 @@ See https://oofhours.com for more information.
 
 The UWP (WinRT) APIs this script uses are only available in Windows PowerShell 5.1. When run from
 PowerShell 7 or later, the script collects the package family names and runs itself in a Windows
-PowerShell 5.1 session (New-PSSession -UseWindowsPowerShell), so verbose, warning and host output
-still appears in the calling session.
+PowerShell 5.1 session (New-PSSession -UseWindowsPowerShell). Its verbose, warning, debug, host and error
+output is written to the matching streams in the calling session, so it can be redirected and is captured
+in transcripts.
 
 #>
 
@@ -147,14 +150,30 @@ End {
     Write-Verbose "Running in PowerShell $($PSVersionTable.PSVersion); updating apps through a Windows PowerShell 5.1 session"
     $session = New-PSSession -UseWindowsPowerShell -ErrorAction Stop
     try {
-        # Carry the caller's verbose/debug settings into the 5.1 session
-        $verbose = $VerbosePreference
-        $debug = $DebugPreference
+        # Run the script in the 5.1 session with all of its streams merged into the output, and write each message back
+        # to the matching stream here.  Messages that Invoke-Command passes along by itself go straight to the host, so
+        # callers can't redirect them (*>&1) and transcripts don't always capture them.  The caller's verbose and debug
+        # settings are passed along too.
+        $scriptText = Get-Content -LiteralPath $PSCommandPath -Raw
         Invoke-Command -Session $session -ScriptBlock {
-            $global:VerbosePreference = $using:verbose
-            $global:DebugPreference = $using:debug
-        }
-        Invoke-Command -Session $session -FilePath $PSCommandPath -ArgumentList (, [string[]] $collectedNames)
+            param ([string] $ScriptText, [string[]] $Names, [string] $Verbose, [string] $Debug)
+            $VerbosePreference = $Verbose
+            $DebugPreference = $Debug
+            & ([scriptblock]::Create($ScriptText)) -PackageFamilyName $Names *>&1
+        } -ArgumentList $scriptText, $collectedNames.ToArray(), "$VerbosePreference", "$DebugPreference" |
+            ForEach-Object {
+                $typeNames = $_.PSObject.TypeNames
+                if ($typeNames -like '*.VerboseRecord') { Write-Verbose $_.Message }
+                elseif ($typeNames -like '*.WarningRecord') { Write-Warning $_.Message }
+                elseif ($typeNames -like '*.DebugRecord') { Write-Debug $_.Message }
+                elseif ($typeNames -like '*.InformationRecord') {
+                    # Write-Host output (the message data is a HostInformationMessage)
+                    $data = $_.MessageData
+                    Write-Host $(if ($null -ne $data.Message) { $data.Message } else { "$data" })
+                }
+                elseif ($typeNames -like '*.ErrorRecord') { Write-Error -Message "$_" }
+                else { $_ }
+            }
     }
     finally {
         Remove-PSSession -Session $session
