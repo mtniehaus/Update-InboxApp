@@ -162,16 +162,16 @@ End {
             & ([scriptblock]::Create($ScriptText)) -PackageFamilyName $Names *>&1
         } -ArgumentList $scriptText, $collectedNames.ToArray(), "$VerbosePreference", "$DebugPreference" |
             ForEach-Object {
+                # The records come back deserialized, without their usual properties (e.g. Message), but their text
+                # (ToString) is kept, so use that.  (-Message can't be empty, hence the fallback.)
                 $typeNames = $_.PSObject.TypeNames
-                if ($typeNames -like '*.VerboseRecord') { Write-Verbose $_.Message }
-                elseif ($typeNames -like '*.WarningRecord') { Write-Warning $_.Message }
-                elseif ($typeNames -like '*.DebugRecord') { Write-Debug $_.Message }
-                elseif ($typeNames -like '*.InformationRecord') {
-                    # Write-Host output (the message data is a HostInformationMessage)
-                    $data = $_.MessageData
-                    Write-Host $(if ($null -ne $data.Message) { $data.Message } else { "$data" })
-                }
-                elseif ($typeNames -like '*.ErrorRecord') { Write-Error -Message "$_" }
+                $text = "$_"
+                if (-not $text) { $text = ' ' }
+                if ($typeNames -like '*.VerboseRecord') { Write-Verbose $text }
+                elseif ($typeNames -like '*.WarningRecord') { Write-Warning $text }
+                elseif ($typeNames -like '*.DebugRecord') { Write-Debug $text }
+                elseif ($typeNames -like '*.InformationRecord') { Write-Host $text }
+                elseif ($typeNames -like '*.ErrorRecord') { Write-Error -Message $text }
                 else { $_ }
             }
     }
